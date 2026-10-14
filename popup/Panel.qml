@@ -1,0 +1,1 @@
+../shell/Panel.qml

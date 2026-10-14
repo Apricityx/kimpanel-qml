@@ -1,0 +1,372 @@
+diff --git a/src/frontend/dbusfrontend/dbusfrontend.cpp b/src/frontend/dbusfrontend/dbusfrontend.cpp
+index 8e2a555..a633b0d 100644
+--- a/src/frontend/dbusfrontend/dbusfrontend.cpp
++++ b/src/frontend/dbusfrontend/dbusfrontend.cpp
+@@ -60,6 +60,9 @@ bool useClientSideUI(Instance *instance) {
+     if (instance->userInterfaceManager().currentUI() != "kimpanel") {
+         return true;
+     }
++    if (checkBoolEnvVar("FCITX_KIMPANEL_TOOLKIT_UI")) {
++        return false;
++    }
+     const static DesktopType desktop = getDesktopType();
+     return desktop != DesktopType::GNOME;
+ }
+diff --git a/src/ui/classic/CMakeLists.txt b/src/ui/classic/CMakeLists.txt
+index 808a509..614033b 100644
+--- a/src/ui/classic/CMakeLists.txt
++++ b/src/ui/classic/CMakeLists.txt
+@@ -8,7 +8,7 @@ if (WAYLAND_FOUND)
+     set(CLASSICUI_SRCS ${CLASSICUI_SRCS}
+         waylandui.cpp waylandwindow.cpp waylandshmwindow.cpp
+         waylandpointer.cpp buffer.cpp waylandinputwindow.cpp
+-        waylandcursor.cpp waylandcursortheme.cpp)
++        waylandcursor.cpp waylandcursortheme.cpp qmlpopup.cpp)
+     set(CLASSICUI_LIBS ${CLASSICUI_LIBS}
+         Fcitx5::Module::Wayland Fcitx5::Module::WaylandIM Wayland::Client Fcitx5::Wayland::Core
+         Wayland::Cursor
+@@ -41,6 +41,7 @@ endif()
+ 
+ target_link_libraries(classicui
+     Fcitx5::Core
++    nlohmann_json::nlohmann_json
+     PkgConfig::Cairo PkgConfig::Pango
+     PkgConfig::GdkPixbuf PkgConfig::GioUnix
+     Fcitx5::Module::NotificationItem
+diff --git a/src/ui/classic/waylandinputwindow.cpp b/src/ui/classic/waylandinputwindow.cpp
+index b0570e5..a7176a8 100644
+--- a/src/ui/classic/waylandinputwindow.cpp
++++ b/src/ui/classic/waylandinputwindow.cpp
+@@ -14,6 +14,9 @@
+ #include <cairo.h>
+ #include "fcitx-utils/rect.h"
+ #include "fcitx/inputcontext.h"
++#include "fcitx/inputpanel.h"
++#include "fcitx/instance.h"
++#include "fcitx/userinterface.h"
+ #include "common.h"
+ #include "ext_background_effect_manager_v1.h"
+ #include "inputwindow.h"
+@@ -40,6 +43,13 @@ WaylandInputWindow::WaylandInputWindow(WaylandUI *ui)
+     : InputWindow(ui->parent()), ui_(ui), window_(ui->newWindow()) {
+     window_->createWindow();
+     window_->repaint().connect([this]() {
++        if (qmlActive()) {
++            if (visible() && qmlScale_ != window_->bufferScale()) {
++                if (auto *ic = repaintIC_.get(); ic && ic->hasFocus()) updateQml(ic);
++            }
++            renderQml();
++            return;
++        }
+         if (auto *ic = repaintIC_.get()) {
+             if (ic->hasFocus()) {
+                 update(ic);
+@@ -48,23 +58,30 @@ WaylandInputWindow::WaylandInputWindow(WaylandUI *ui)
+     });
+     window_->click().connect([this](int x, int y, uint32_t button,
+                                     uint32_t state) {
+-        if (state == WL_POINTER_BUTTON_STATE_PRESSED && button == BTN_LEFT) {
++        if (qmlActive() && button == BTN_LEFT) {
++            qmlPointer(state == WL_POINTER_BUTTON_STATE_PRESSED ? "press" : "release", x, y);
++        } else if (state == WL_POINTER_BUTTON_STATE_PRESSED && button == BTN_LEFT) {
+             click(x, y);
+         }
+     });
+     window_->hover().connect([this](int x, int y) {
++        if (qmlActive()) { qmlPointer("move", x, y); return; }
+         if (hover(x, y)) {
+             repaint();
+         }
+     });
+     window_->leave().connect([this]() {
++        if (qmlActive()) { qmlPointer("move", -1, -1); return; }
+         if (hover(-1, -1)) {
+             repaint();
+         }
+     });
+-    window_->touchDown().connect([this](int x, int y) { click(x, y); });
+-    window_->touchUp().connect([](int, int) {
+-        // do nothing
++    window_->touchDown().connect([this](int x, int y) {
++        if (qmlActive()) qmlPointer("press", x, y);
++        else click(x, y);
++    });
++    window_->touchUp().connect([this](int x, int y) {
++        if (qmlActive()) qmlPointer("release", x, y);
+     });
+     window_->axis().connect([this](int, int, uint32_t axis, wl_fixed_t value) {
+         if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) {
+@@ -87,6 +104,8 @@ WaylandInputWindow::WaylandInputWindow(WaylandUI *ui)
+         }
+     });
+     initPanel();
++    qml_ = std::make_unique<QmlPopup>(parent_->instance()->eventLoop(),
++                                     [this](const auto &m) { qmlMessage(m); });
+ }
+ 
+ void WaylandInputWindow::initPanel() {
+@@ -157,18 +176,31 @@ void WaylandInputWindow::update(fcitx::InputContext *ic) {
+ 
+     if (!visible()) {
+         CLASSICUI_DEBUG() << "Hide Wayland Input Window.";
+-        hoverIndex_ = -1;
+-        window_->hide();
+-        repaintIC_.unwatch();
+-        panelSurface_.reset();
+-        panelSurfaceV2_.reset();
+-        blur_.reset();
+-        window_->destroyWindow();
++        if (ic && qmlActive() && repaintIC_.get() == ic && ic->hasFocus()) {
++            ++qmlEpoch_;
++            qml_->send({{"visible", false}, {"epoch", qmlEpoch_}, {"session", qmlSession_}});
++            // A stuck renderer must never leave a stale popup on screen.
++            qmlHideTimer_ = parent_->instance()->eventLoop().addTimeEvent(
++                CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 600000, 0,
++                [this](EventSourceTime *source, uint64_t) {
++                    source->setEnabled(false);
++                    if (!visible()) hidePanel();
++                    return true;
++                });
++        } else {
++            hidePanel();
++        }
+         return;
+     }
+ 
+     assert(!visible() || ic != nullptr);
+ 
++    const bool useQml = ic->frontendName() == "wayland_v2" && qml_ && qml_->available();
++    if ((qmlMode_ != useQml || (panelSurfaceV2_ && ic != v2IC_.get()))) {
++        hidePanel();
++    }
++    qmlHideTimer_.reset();
++
+     CLASSICUI_DEBUG()
+         << "Wayland Input Window is visible, ensure surface is created.";
+     initPanel();
+@@ -209,6 +241,21 @@ void WaylandInputWindow::update(fcitx::InputContext *ic) {
+         return;
+     }
+ 
++    repaintIC_ = ic->watch();
++    if (useQml) {
++        if (!qmlMode_) {
++            qmlMode_ = true;
++            ++qmlSession_;
++            qmlPage_ = -1;
++            qml_->clearFrame();
++        } else if (!oldVisible) {
++            ++qmlSession_;
++            qmlPage_ = -1;
++        }
++        updateQml(ic);
++        return;
++    }
++
+     if (width != window_->width() || height != window_->height()) {
+         window_->resize(width, height);
+         updateBlur();
+@@ -225,6 +272,7 @@ void WaylandInputWindow::update(fcitx::InputContext *ic) {
+ }
+ 
+ void WaylandInputWindow::repaint() {
++    if (qmlActive()) { renderQml(); return; }
+     if (!visible()) {
+         return;
+     }
+@@ -238,4 +286,136 @@ void WaylandInputWindow::repaint() {
+     }
+ }
+ 
++bool WaylandInputWindow::qmlActive() const {
++    return qmlMode_ && qml_ && qml_->available();
++}
++
++void WaylandInputWindow::hidePanel() {
++    ++qmlEpoch_;
++    if (qmlActive()) {
++        qml_->send({{"visible", false}, {"epoch", qmlEpoch_}, {"session", qmlSession_}});
++        qml_->clearFrame();
++    }
++    qmlMode_ = false;
++    hoverIndex_ = -1;
++    window_->hide();
++    repaintIC_.unwatch();
++    panelSurface_.reset();
++    panelSurfaceV2_.reset();
++    blur_.reset();
++    window_->destroyWindow();
++}
++
++void WaylandInputWindow::updateQml(InputContext *ic) {
++    auto *instance = parent_->instance();
++    auto &panel = ic->inputPanel();
++    const auto preedit = instance->outputFilter(ic, panel.preedit());
++    const auto aux = instance->outputFilter(ic, panel.auxUp()).toString();
++    auto text = aux + preedit.toString();
++    const auto down = instance->outputFilter(ic, panel.auxDown()).toString();
++    if (!down.empty()) text += (text.empty() ? "" : "  ") + down;
++    // fcitx cursors are UTF-8 byte offsets; QML strings use UTF-16 offsets.
++    int caret = -1;
++    if (preedit.cursor() >= 0 && size_t(preedit.cursor()) <= preedit.toString().size()) {
++        const auto prefix = aux + preedit.toString().substr(0, preedit.cursor());
++        caret = 0;
++        for (auto ch : prefix) {
++            auto byte = static_cast<unsigned char>(ch);
++            if ((byte & 0xc0) != 0x80) caret += byte >= 0xf0 ? 2 : 1;
++        }
++    }
++    nlohmann::json candidates = nlohmann::json::array();
++    int pageDir = 0;
++    if (auto list = panel.candidateList()) {
++        for (int i = 0; i < list->size(); ++i) {
++            const auto &candidate = list->candidate(i);
++            if (candidate.isPlaceHolder()) continue;
++            const auto label = candidate.hasCustomLabel() ? candidate.customLabel() : list->label(i);
++            candidates.push_back({{"label", instance->outputFilter(ic, label).toString()},
++                                  {"text", instance->outputFilter(ic, candidate.textWithComment()).toString()}});
++        }
++        if (auto *pageable = list->toPageable()) {
++            const int page = pageable->currentPage();
++            if (page >= 0 && qmlPage_ >= 0 && page != qmlPage_) pageDir = page > qmlPage_ ? 1 : -1;
++            qmlPage_ = page;
++        }
++    }
++    ++qmlEpoch_;
++    qmlScale_ = window_->bufferScale();
++    qml_->send({{"visible", true}, {"epoch", qmlEpoch_}, {"session", qmlSession_},
++                {"scale", qmlScale_ / WaylandWindow::ScaleDominatorF},
++                {"text", text}, {"caret", caret}, {"candidates", candidates},
++                {"cursor", candidateIndex_}, {"hasPrev", hasPrev_}, {"hasNext", hasNext_},
++                {"vertical", layoutHint_ == CandidateLayoutHint::Vertical}, {"pageDir", pageDir}});
++}
++
++void WaylandInputWindow::renderQml() {
++    if (!qmlActive() || !window_->surface() || !panelSurfaceV2_) return;
++    auto *ic = repaintIC_.get();
++    if (!ic || !ic->hasFocus()) { hidePanel(); return; }
++    const auto &frame = qml_->frame();
++    if (frame.epoch != qmlEpoch_ || frame.pixels.empty()) return;
++    window_->resize(frame.logicalWidth, frame.logicalHeight);
++    if (auto *surface = window_->prerender()) {
++        auto *source = cairo_image_surface_create_for_data(
++            const_cast<unsigned char *>(frame.pixels.data()), CAIRO_FORMAT_ARGB32,
++            frame.width, frame.height, frame.stride);
++        auto *cr = cairo_create(surface);
++        cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
++        cairo_scale(cr, double(cairo_image_surface_get_width(surface)) / frame.width,
++                    double(cairo_image_surface_get_height(surface)) / frame.height);
++        cairo_set_source_surface(cr, source, 0, 0);
++        cairo_paint(cr);
++        cairo_destroy(cr);
++        cairo_surface_destroy(source);
++        window_->render();
++    }
++}
++
++void WaylandInputWindow::qmlPointer(const char *kind, int x, int y) {
++    if (visible()) qml_->send({{"pointer", kind}, {"x", x}, {"y", y}, {"epoch", qmlEpoch_}});
++}
++
++void WaylandInputWindow::qmlMessage(const nlohmann::json &message) {
++    if (message.contains("failed")) {
++        CLASSICUI_ERROR() << "QML popup renderer disconnected; using classicui drawing";
++        if (qmlMode_) {
++            qmlMode_ = false;
++            if (auto *ic = repaintIC_.get(); ic && ic->hasFocus()) update(ic);
++            else hidePanel();
++        }
++        return;
++    }
++    if (!qmlActive() || message.value("epoch", uint64_t(0)) != qmlEpoch_) return;
++    if (message.contains("hidden")) {
++        if (!visible()) hidePanel();
++    } else if (message.contains("frame")) {
++        renderQml();
++    } else if (message.contains("command") && visible()) {
++        auto *ic = repaintIC_.get();
++        if (!ic || !ic->hasFocus()) return;
++        const auto list = ic->inputPanel().candidateList();
++        if (!list) return;
++        const std::string command = message.at("command");
++        if (command == "prev" || command == "next") {
++            if (auto *pageable = list->toPageable()) {
++                if (command == "prev" && pageable->hasPrev()) pageable->prev();
++                else if (command == "next" && pageable->hasNext()) pageable->next();
++                else return;
++                ic->updateUserInterface(UserInterfaceComponent::InputPanel);
++            }
++        } else if (command.compare(0, 7, "select ") == 0) {
++            char *end;
++            const auto index = strtol(command.c_str() + 7, &end, 10);
++            if (*end || index < 0) return;
++            int local = 0;
++            for (int i = 0; i < list->size(); ++i) {
++                const auto &candidate = list->candidate(i);
++                if (candidate.isPlaceHolder()) continue;
++                if (local++ == index) { candidate.select(ic); return; }
++            }
++        }
++    }
++}
++
+ } // namespace fcitx::classicui
+diff --git a/src/ui/classic/waylandinputwindow.h b/src/ui/classic/waylandinputwindow.h
+index 4a12569..46d4e40 100644
+--- a/src/ui/classic/waylandinputwindow.h
++++ b/src/ui/classic/waylandinputwindow.h
+@@ -14,6 +14,7 @@
+ #include "ext_background_effect_manager_v1.h"
+ #include "ext_background_effect_surface_v1.h"
+ #include "inputwindow.h"
++#include "qmlpopup.h"
+ #include "zwp_input_panel_surface_v1.h"
+ #include "zwp_input_popup_surface_v2.h"
+ 
+@@ -36,6 +37,12 @@ public:
+ 
+ private:
+     void updateBlur();
++    void hidePanel();
++    bool qmlActive() const;
++    void updateQml(InputContext *ic);
++    void renderQml();
++    void qmlMessage(const nlohmann::json &message);
++    void qmlPointer(const char *kind, int x, int y);
+ 
+     WaylandUI *ui_;
+     wl_fixed_t scroll_ = 0;
+@@ -46,6 +53,14 @@ private:
+     TrackableObjectReference<InputContext> repaintIC_;
+     std::shared_ptr<wayland::ExtBackgroundEffectManagerV1> blurManager_;
+     std::unique_ptr<wayland::ExtBackgroundEffectSurfaceV1> blur_;
++    uint64_t qmlEpoch_ = 0;
++    int qmlSession_ = 0;
++    int qmlPage_ = -1;
++    unsigned int qmlScale_ = 0;
++    bool qmlMode_ = false;
++    std::unique_ptr<EventSourceTime> qmlHideTimer_;
++    // Last: socket callbacks must be disconnected before window destruction.
++    std::unique_ptr<QmlPopup> qml_;
+ };
+ 
+ } // namespace fcitx::classicui
+diff --git a/src/ui/kimpanel/kimpanel.cpp b/src/ui/kimpanel/kimpanel.cpp
+index ca74dab..230b858 100644
+--- a/src/ui/kimpanel/kimpanel.cpp
++++ b/src/ui/kimpanel/kimpanel.cpp
+@@ -292,9 +292,11 @@ void Kimpanel::update(UserInterfaceComponent component,
+         return;
+     }
+     if (component == UserInterfaceComponent::InputPanel) {
+-        if (classicui() && isKDE() &&
+-            (inputContext->frontendName().starts_with("wayland") ||
+-             (xcb() && inputContext->display().starts_with("x11:") &&
++        if (classicui() &&
++            (((isKDE() || checkBoolEnvVar("FCITX_KIMPANEL_WAYLAND_POPUP")) &&
++              inputContext->frontendName().starts_with("wayland")) ||
++             (isKDE() && xcb() &&
++              inputContext->display().starts_with("x11:") &&
+               xcb()->call<IXCBModule::isXWayland>(
+                   inputContext->display().substr(4))))) {
+             proxy_->showAux(false);

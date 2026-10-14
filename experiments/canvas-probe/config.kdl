@@ -1,0 +1,13 @@
+// Disposable nested compositor; never load this in the desktop instance.
+layout {
+    gaps 0
+    border { off; }
+    focus-ring { off; }
+    default-column-width { proportion 1.0; }
+}
+animations { off; }
+prefer-no-csd
+window-rule {
+    match app-id="^popup-canvas-probe$"
+    default-column-width { proportion 1.0; }
+}

@@ -1,0 +1,3 @@
+// Merge manually into your existing config; do not replace the whole file.
+// Fcitx is started by the generated XDG autostart entry, not again here.
+spawn-at-startup "sh" "-c" "$HOME/.local/bin/kimpanel-qmlctl start"

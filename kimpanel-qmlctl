@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# DBus overlay controls; native popup renderer is owned by fcitx5 classicui.
+#
+#   kimpanel-qmlctl start|stop|restart|status|logs
+#   kimpanel-qmlctl demo [--grab DIR]   preview scripted sessions (no fcitx needed)
+#
+# Env: KIMPANEL_BAR_SIZE / KIMPANEL_BAR_EDGE / KIMPANEL_NIRI_GAPS tune where
+# relative cursor rects of tiled windows land (see kimpanel/geometry.py).
+set -u
+
+DIR="${KIMPANEL_QML_DIR:-$(cd "$(dirname "$(readlink -f "$0")")" && pwd)}"
+RUN="${XDG_RUNTIME_DIR:-/tmp}/kimpanel-qml"
+SOCK="$RUN/panel.sock"
+LOG="$RUN/kimpanel.log"
+mkdir -p -m 700 "$RUN"
+
+# pid file -> pid, only if it is still the process we started.
+alive() {
+    local pid cmd
+    pid="$(cat "$RUN/$1.pid" 2>/dev/null)" || return 1
+    [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ] || return 1
+    cmd="$(tr '\0' ' ' <"/proc/$pid/cmdline")" || return 1
+    if [[ "$cmd" == *"$2"* ]]; then echo "$pid"; return 0; fi
+    # Migration compatibility: a running process may still use the old symlink.
+    python3 - "$pid" "$2" <<'PY'
+import os, sys
+from pathlib import Path
+pid, expected = sys.argv[1:]
+try:
+    arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    if any(os.path.isabs(os.fsdecode(arg)) and os.path.realpath(os.fsdecode(arg)) == os.path.realpath(expected)
+           for arg in arguments if arg):
+        print(pid)
+    else:
+        sys.exit(1)
+except OSError:
+    sys.exit(1)
+PY
+}
+
+stop() {
+    local pid
+    for p in "qs:$DIR/shell" "bridge:$DIR/bridge.py"; do
+        pid="$(alive "${p%%:*}" "${p#*:}")" && kill "$pid" 2>/dev/null
+        rm -f "$RUN/${p%%:*}.pid"
+    done
+    # Only stop verified PIDs managed by this controller; no broad pkill.
+}
+
+wait_socket() {
+    for _ in $(seq 40); do [ -S "$1" ] && return 0; sleep 0.05; done
+    return 1
+}
+
+start() {
+    if alive bridge "$DIR/bridge.py" >/dev/null && alive qs "$DIR/shell" >/dev/null; then
+        echo "already running"; return 0
+    fi
+    stop
+    : >"$LOG"
+    setsid python3 "$DIR/bridge.py" >>"$LOG" 2>&1 </dev/null &
+    echo $! >"$RUN/bridge.pid"
+    wait_socket "$SOCK" || echo "warning: bridge socket did not appear, see $LOG" >&2
+    setsid qs -p "$DIR/shell" >>"$LOG" 2>&1 </dev/null &
+    echo $! >"$RUN/qs.pid"
+    echo "started (log: $LOG)"
+}
+
+status() {
+    printf 'bridge: %s\n' "$(alive bridge "$DIR/bridge.py" || echo stopped)"
+    printf 'ui:     %s\n' "$(alive qs "$DIR/shell" || echo stopped)"
+    printf 'socket: %s\n' "$([ -S "$SOCK" ] && echo "$SOCK" || echo missing)"
+    local pid mode=stopped popup
+    pid="$(pgrep -u "$(id -u)" -x fcitx5 | head -n 1)"
+    if [ -n "$pid" ]; then
+        mode=system-classicui
+        if grep -Fq "/kimpanel-qml/addon/libclassicui.so" "/proc/$pid/maps" 2>/dev/null; then
+            mode=qml-classicui
+        fi
+    fi
+    popup="$(pgrep -u "$(id -u)" -f '[k]impanel-qml/popup/render.py' | tr '\n' ' ')"
+    printf 'fcitx:  %s (%s)\n' "${pid:-stopped}" "$mode"
+    printf 'popup:  %s\n' "${popup:-stopped}"
+    printf 'logs:   %s, %s\n' "$RUN/fcitx.log" "$RUN/popup.log"
+    echo "--- $LOG"; tail -n 8 "$LOG" 2>/dev/null
+}
+
+demo() {
+    local dsock="$RUN/demo.sock" b q
+    python3 "$DIR/bridge.py" --demo --socket "$dsock" "$@" &
+    b=$!
+    wait_socket "$dsock" || { kill "$b"; echo "demo bridge failed" >&2; return 1; }
+    KIMPANEL_QML_SOCK="$dsock" qs -p "$DIR/shell" &
+    q=$!
+    trap 'kill $q $b 2>/dev/null' EXIT INT TERM
+    wait "$b"
+    sleep 1
+}
+
+case "${1:-}" in
+    start)   start ;;
+    stop)    stop; echo stopped ;;
+    restart) stop; sleep 0.2; start ;;
+    status)  status ;;
+    logs)    exec tail -n 50 -F "$LOG" "$RUN/fcitx.log" "$RUN/popup.log" ;;
+    demo)    shift; demo "$@" ;;
+    *) echo "usage: ${0##*/} {start|stop|restart|status|logs|demo [--grab DIR]}" >&2; exit 1 ;;
+esac

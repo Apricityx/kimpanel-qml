@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -eu
+DIR="${KIMPANEL_QML_DIR:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
+RUN="${XDG_RUNTIME_DIR:-/tmp}/kimpanel-qml"
+mkdir -p -m 700 "$RUN"
+PYTHON="${KIMPANEL_RENDERER_PYTHON:-$DIR/popup-venv/bin/python}"
+if [ ! -x "$PYTHON" ]; then
+    echo "Renderer Python missing: $PYTHON; run make renderer-env" >&2
+    exit 1
+fi
+exec "$PYTHON" "$DIR/popup/render.py" "$@" >>"$RUN/popup.log" 2>&1

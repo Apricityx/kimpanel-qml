@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# System fcitx5/core/engines, user-local candidates. No global toolkit override.
+set -eu
+qml_dir="${KIMPANEL_QML_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/kimpanel-qml}"
+for addon in classicui kimpanel dbusfrontend; do
+    if [ ! -r "$qml_dir/addon/lib$addon.so" ]; then
+        echo "Missing $qml_dir/addon/lib$addon.so; build and install kimpanel-qml first" >&2
+        exit 1
+    fi
+done
+export FCITX_ADDON_DIRS="$qml_dir/addon:${FCITX_ADDON_DIRS:-/usr/lib64/fcitx5}"
+export FCITX_KIMPANEL_WAYLAND_POPUP=1
+export FCITX_KIMPANEL_TOOLKIT_UI=1
+if [ "${FCITX_QML_POPUP:-1}" != 0 ] && [ -x "$qml_dir/popup/launch" ]; then
+    export FCITX_QML_POPUP_RENDERER="$qml_dir/popup/launch"
+else
+    unset FCITX_QML_POPUP_RENDERER
+fi
+exec /usr/bin/fcitx5 -D --replace

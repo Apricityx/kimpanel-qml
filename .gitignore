@@ -1,0 +1,13 @@
+# Local runtime preserved during the migration; never publish binaries/venvs.
+/addon/
+/popup-venv/
+/build/
+/local/
+/.venv/
+__pycache__/
+*.py[cod]
+*.so
+*.log
+.pytest_cache/
+.ruff_cache/
+.DS_Store

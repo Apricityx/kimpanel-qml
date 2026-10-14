@@ -1,0 +1,2 @@
+# Native offscreen renderer; GLib/DBus dependencies come from the distro.
+PySide6==6.11.2

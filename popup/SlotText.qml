@@ -1,0 +1,1 @@
+../shell/SlotText.qml
