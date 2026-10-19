@@ -1,7 +1,9 @@
 """Map fcitx cursor rects to output-local logical pixels for the UI.
 
-Absolute rects (SetSpotRect, XIM/X11 clients) are global compositor
-coordinates. Relative rects (SetRelativeSpotRect[V2], GTK/Qt im modules on
+Absolute rects (SetSpotRect, XIM/X11 clients) normally use global coordinates.
+xwayland-satellite's X virtual root is separate from compositor positions;
+satellite_spot translates those via the focused window. Relative rects
+(SetRelativeSpotRect[V2], GTK/Qt im modules on
 Wayland) are relative to the focused window and need its on-screen origin.
 
 niri's IPC only reports positions for floating windows, so tiled window
@@ -77,6 +79,36 @@ def _absolute(x, y, w, h, outputs, focused):
 def _spot(name, x, y, w, h):
     return {"output": name, "x": round(x, 1), "y": round(y, 1),
             "w": round(max(w, 0), 1), "h": round(max(h, 0), 1)}
+
+
+def satellite_spot(rect, x11_origin, window_origin, focused):
+    """X virtual-root device px -> window-relative -> output-local logical px."""
+    if x11_origin is None or window_origin is None or focused is None:
+        return None
+    x, y, w, h = rect
+    if not any(rect):
+        return None
+    scale = focused.get("scale") or 1.0
+    return _spot(focused["name"], (x - x11_origin[0]) / scale + window_origin[0],
+                 (y - x11_origin[1]) / scale + window_origin[1], w / scale, h / scale)
+
+
+def tiled_bar_size(siblings, output, gap):
+    """Infer a top/bottom exclusive zone from full-height tiled column stacks.
+
+    Best effort, like estimate_window_origin itself. Floating positions and
+    explicit KIMPANEL_BAR_SIZE overrides do not use this inference.
+    """
+    columns = {}
+    for sibling in siblings:
+        layout = sibling.get("layout") or {}
+        slot, size = layout.get("pos_in_scrolling_layout"), layout.get("tile_size")
+        if slot and size:
+            columns.setdefault(slot[0], []).append(size[1])
+    if not columns:
+        return None
+    height = max(sum(heights) + gap * (len(heights) - 1) for heights in columns.values())
+    return max(0.0, output["height"] - height - 2 * gap)
 
 
 def estimate_window_origin(win, siblings, output, gap, bar_size, bar_edge):

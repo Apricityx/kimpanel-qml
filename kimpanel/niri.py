@@ -7,6 +7,7 @@ import sys
 import time
 
 from . import geometry
+from .x11 import X11Client, is_satellite_window
 
 
 class NiriClient:
@@ -64,12 +65,14 @@ def _logical(name, o):
 class SpotResolver:
     """Callable used by PanelModel: PanelState -> spot dict or None."""
 
-    def __init__(self, client=None, gap=None, bar_size=None, bar_edge=None):
+    def __init__(self, client=None, gap=None, bar_size=None, bar_edge=None, x11=None):
         env = os.environ.get
         self.client = client or NiriClient()
         self.gap = float(gap if gap is not None else env("KIMPANEL_NIRI_GAPS", "4"))
         self.bar_size = float(bar_size if bar_size is not None else env("KIMPANEL_BAR_SIZE", "43"))
         self.bar_edge = bar_edge or env("KIMPANEL_BAR_EDGE", "top")
+        self._auto_bar = bar_size is None and env("KIMPANEL_BAR_SIZE") is None
+        self._x11 = x11
         self._warned = False
         self._last = None  # (spot, monotonic, window_id)
 
@@ -87,10 +90,32 @@ class SpotResolver:
                     self._warned = True
                     print("kimpanel: niri IPC unavailable (%s); spot not translated" % e,
                           file=sys.stderr, flush=True)
-        spot = geometry.spot_from_rect(state.spot, state.spot_mode, state.spot_scale,
-                                       origin, outputs, focused)
+        spot = None
+        satellite = is_satellite_window(win)
+        if state.spot_mode == "absolute" and focused and satellite:
+            try:
+                if self._x11 is None:
+                    self._x11 = X11Client()
+                x11_origin = self._x11.window_origin(win.get("app_id"))
+                bar_size = self.bar_size
+                if self._auto_bar and self.bar_edge in ("top", "bottom"):
+                    inferred = geometry.tiled_bar_size(siblings, focused, self.gap)
+                    if inferred is not None:
+                        bar_size = inferred
+                origin = geometry.estimate_window_origin(
+                    win, siblings, focused, self.gap, bar_size, self.bar_edge)
+                spot = geometry.satellite_spot(state.spot, x11_origin, origin, focused)
+            except OSError as e:
+                if not self._warned:
+                    self._warned = True
+                    print(f"kimpanel: X11 geometry unavailable ({e})", file=sys.stderr, flush=True)
+        if spot is None:
+            spot = geometry.spot_from_rect(state.spot, state.spot_mode, state.spot_scale,
+                                           origin, outputs, focused)
         win_id = (win or {}).get("id")
+        caret_top = state.spot_mode == "relative" and bool(win) and not satellite
         if spot and "x" in spot:
+            spot = _placement(spot, caret_top)
             self._last = (spot, time.monotonic(), win_id)
             return spot
         # wayland_v2 clients (Alacritty, Edge) often send (0,0,0,0). Keep the
@@ -98,8 +123,17 @@ class SpotResolver:
         if self._last:
             last, t, last_id = self._last
             if last_id == win_id and time.monotonic() - t < 8:
-                return last
+                return _placement(last, caret_top)
         guess = geometry.window_guess(win, siblings, focused, self.gap, self.bar_size, self.bar_edge)
         if guess:
             return guess
         return spot
+
+
+def _placement(spot, caret_top):
+    """Align Wayland relative carets at their top; preserve XWayland placement."""
+    spot = dict(spot)
+    spot.pop("caretTop", None)
+    if caret_top:
+        spot["caretTop"] = True
+    return spot

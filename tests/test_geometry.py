@@ -4,7 +4,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from kimpanel.geometry import estimate_window_origin, spot_from_rect  # noqa: E402
+from kimpanel.geometry import (estimate_window_origin, satellite_spot,
+                              spot_from_rect, tiled_bar_size)  # noqa: E402
 
 OUT = {"name": "eDP-1", "x": 0, "y": 0, "width": 1706, "height": 1066, "scale": 1.5}
 OUT2 = {"name": "HDMI-A-1", "x": 1706, "y": 0, "width": 1920, "height": 1080, "scale": 1.0}
@@ -80,6 +81,30 @@ class TestWindowOrigin(unittest.TestCase):
         cols = [win(1, 1, 1699, 1015), win(2, 1, 1699, 1015), win(3, 1, 847, 1015)]
         x, _ = self.origin(cols[2], cols)
         self.assertAlmostEqual(x, 1706 - 4 - 847)
+
+
+class TestSatelliteSpot(unittest.TestCase):
+    def test_right_half_window_adds_compositor_origin(self):
+        # X sees the WeChat toplevel at (0,0), niri places it in column 2.
+        spot = satellite_spot((765, 1389, 3, 27), (0, 0), (855, 37), OUT)
+        self.assertEqual(spot, dict(output="eDP-1", x=1365, y=963, w=2, h=18))
+
+    def test_subtracts_nonzero_virtual_root_origin_before_scaling(self):
+        spot = satellite_spot((1065, 1539, 3, 27), (300, 150), (855, 37), OUT)
+        self.assertEqual((spot["x"], spot["y"]), (1365, 963))
+
+    def test_second_output_is_local_not_global(self):
+        spot = satellite_spot((100, 200, 2, 20), (0, 0), (50, 60), OUT2)
+        self.assertEqual(spot, dict(output="HDMI-A-1", x=150, y=260, w=2, h=20))
+
+    def test_missing_geometry_and_zero_rect_have_no_exact_spot(self):
+        self.assertIsNone(satellite_spot((0, 0, 0, 0), (0, 0), (4, 47), OUT))
+        self.assertIsNone(satellite_spot((10, 20, 2, 18), None, (4, 47), OUT))
+
+    def test_bar_inference_accounts_for_stacked_tiles_and_gaps(self):
+        self.assertEqual(tiled_bar_size([win(1, 1, 847, 500), win(1, 2, 847, 525)], OUT, 4), 29)
+        self.assertEqual(tiled_bar_size([win(1, 1, 847, 1025)], OUT, 4), 33)
+        self.assertIsNone(tiled_bar_size([], OUT, 4))
 
 
 if __name__ == "__main__":
