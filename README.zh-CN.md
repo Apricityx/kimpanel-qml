@@ -33,9 +33,3 @@ make install                   # 仅当系统 fcitx5 与版本锁一致
 ```sh
 ./kimpanel-qmlctl status | start | restart | logs | demo
 ```
-
-## 限制
-
-- 原生 popup 回退的任意全局移动动画尚未实现，画布实验保持暂停。
-- 平铺窗口的 overlay 坐标是估算值，滚动时可能滞后。
-- 项目尚未选定统一许可证，见 [NOTICE.md](NOTICE.md)。

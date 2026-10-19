@@ -36,10 +36,3 @@ versions and rollback: [build](docs/build.en.md), [install](docs/install.en.md),
 ```sh
 ./kimpanel-qmlctl status | start | restart | logs | demo
 ```
-
-## Limits
-
-- Arbitrary global movement animation for the native popup fallback is not
-  implemented; the canvas experiment stays paused.
-- Tiled overlay geometry is an estimate and can lag while scrolling.
-- No project-wide license has been chosen yet; see [NOTICE.md](NOTICE.md).
