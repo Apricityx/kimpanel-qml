@@ -11,7 +11,12 @@ done
 export FCITX_ADDON_DIRS="$qml_dir/addon:${FCITX_ADDON_DIRS:-/usr/lib64/fcitx5}"
 export FCITX_KIMPANEL_WAYLAND_POPUP=1
 export FCITX_KIMPANEL_TOOLKIT_UI=1
-if [ "${FCITX_QML_POPUP:-1}" != 0 ] && [ -x "$qml_dir/popup/launch" ]; then
+case "${KIMPANEL_NATIVE_UI:-overlay}" in
+    overlay) export FCITX_KIMPANEL_NATIVE_OVERLAY=1 ;;
+    popup) export FCITX_KIMPANEL_NATIVE_OVERLAY=0 ;;
+    *) echo 'KIMPANEL_NATIVE_UI must be overlay or popup' >&2; exit 1 ;;
+esac
+if [ "$FCITX_KIMPANEL_NATIVE_OVERLAY" = 0 ] && [ "${FCITX_QML_POPUP:-1}" != 0 ] && [ -x "$qml_dir/popup/launch" ]; then
     export FCITX_QML_POPUP_RENDERER="$qml_dir/popup/launch"
 else
     unset FCITX_QML_POPUP_RENDERER

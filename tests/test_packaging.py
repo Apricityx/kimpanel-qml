@@ -1,6 +1,7 @@
 """Packaging checks use temporary directories and mocks, never the live runtime."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -10,12 +11,62 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 spec = importlib.util.spec_from_file_location("installer", ROOT / "scripts/install.py")
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 
 
 class TestPackaging(unittest.TestCase):
+    def launcher_environment(self, **overrides):
+        """Run the real launcher with only its final exec replaced; never start fcitx."""
+        source = (ROOT / "packaging/fcitx5-user-local").read_text()
+        command = "exec /usr/bin/fcitx5 -D --replace"
+        self.assertEqual(source.count(command), 1)
+        with tempfile.TemporaryDirectory(prefix="kimpanel-launcher-") as tmp:
+            runtime = Path(tmp)
+            (runtime / "addon").mkdir()
+            for name in installer.ADDONS:
+                (runtime / "addon" / f"lib{name}.so").touch()
+            (runtime / "popup").mkdir()
+            launch = runtime / "popup/launch"
+            launch.write_text("#!/bin/sh\nexit 0\n")
+            launch.chmod(0o755)
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("FCITX_", "KIMPANEL_"))}
+            env.update(KIMPANEL_QML_DIR=str(runtime), **overrides)
+            result = subprocess.run(["bash"], input=source.replace(command, "env -0"),
+                                    env=env, capture_output=True, text=True)
+            values = dict(item.split("=", 1) for item in result.stdout.split("\0") if "=" in item)
+            return result, values
+
+    def test_launcher_defaults_native_overlay_and_clears_stale_renderer(self):
+        result, env = self.launcher_environment(FCITX_QML_POPUP_RENDERER="/stale/renderer")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(env["FCITX_KIMPANEL_NATIVE_OVERLAY"], "1")
+        self.assertEqual(env["FCITX_KIMPANEL_TOOLKIT_UI"], "1")
+        self.assertNotIn("FCITX_QML_POPUP_RENDERER", env)
+
+    def test_launcher_explicit_native_popup_retains_toolkit_route(self):
+        result, env = self.launcher_environment(KIMPANEL_NATIVE_UI="popup",
+                                               FCITX_KIMPANEL_NATIVE_OVERLAY="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(env["FCITX_KIMPANEL_NATIVE_OVERLAY"], "0")
+        self.assertEqual(env["FCITX_KIMPANEL_WAYLAND_POPUP"], "1")
+        self.assertEqual(env["FCITX_KIMPANEL_TOOLKIT_UI"], "1")
+        self.assertTrue(env["FCITX_QML_POPUP_RENDERER"].endswith("/popup/launch"))
+
+    def test_launcher_explicit_cairo_popup(self):
+        result, env = self.launcher_environment(KIMPANEL_NATIVE_UI="popup", FCITX_QML_POPUP="0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(env["FCITX_KIMPANEL_NATIVE_OVERLAY"], "0")
+        self.assertNotIn("FCITX_QML_POPUP_RENDERER", env)
+
+    def test_launcher_rejects_unknown_route(self):
+        result, _ = self.launcher_environment(KIMPANEL_NATIVE_UI="typo")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be overlay or popup", result.stderr)
+
     def test_isolated_install_and_update(self):
         with tempfile.TemporaryDirectory(prefix="kimpanel-install-") as tmp:
             base = Path(tmp)
@@ -28,6 +79,7 @@ class TestPackaging(unittest.TestCase):
             argv = ["install.py", "--prefix", str(prefix), "--addon-dir", str(addons),
                     "--renderer-env", str(base / "env")]
             with patch.object(sys, "argv", argv), patch.object(installer, "check_addons"), \
+                    patch.object(installer, "check_fonts"), \
                     patch.object(installer.subprocess, "run"):
                 installer.main()
                 installer.main()
@@ -71,7 +123,7 @@ class TestPackaging(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="kimpanel-packaging-") as tmp:
             directory = Path(tmp)
             (directory / "build-info.json").write_text(json.dumps(installer.UPSTREAM))
-            with patch.object(installer.subprocess, "check_output", return_value="5.1.23\n"):
+            with patch.object(installer.subprocess, "check_output", return_value="0.0.0\n"):
                 with self.assertRaisesRegex(RuntimeError, "System fcitx5"):
                     installer.check_addons(directory)
 
@@ -91,10 +143,24 @@ class TestPackaging(unittest.TestCase):
             for name in installer.ADDONS:
                 (addons / f"lib{name}.so").write_bytes(b"test-fixture")
             (addons / "build-info.json").write_text(json.dumps(installer.UPSTREAM))
-            installer.copy_runtime(stage, addons, base / "env")
+            # Test font deployment even on fresh clones with no downloaded TTF.
+            source = base / "source"
+            source.mkdir()
+            for name in installer.RUNTIME:
+                if name != "assets":
+                    (source / name).symlink_to(ROOT / name, target_is_directory=(ROOT / name).is_dir())
+            fonts = source / "assets/fonts"
+            fonts.mkdir(parents=True)
+            (fonts / "NotoColorEmoji.ttf").write_bytes(b"font fixture")
+            (fonts / "LICENSE").write_bytes(b"license fixture")
+            with patch.object(installer, "ROOT", source):
+                installer.copy_runtime(stage, addons, base / "env")
+            self.assertEqual((stage / "assets/fonts/NotoColorEmoji.ttf").read_bytes(), b"font fixture")
+            self.assertEqual((stage / "assets/fonts/LICENSE").read_bytes(), b"license fixture")
             self.assertEqual((stage / "popup/Panel.qml").resolve(), stage / "shell/Panel.qml")
             self.assertTrue((stage / "popup-venv").is_symlink())
             self.assertFalse((stage / "popup/check.py").exists())
+            self.assertFalse((stage / "popup/check_emoji.py").exists())
             self.assertFalse((stage / "experiments").exists())
             self.assertFalse(list(stage.rglob("__pycache__")))
             self.assertEqual(len(list((stage / "addon").glob("*.so"))), 3)
