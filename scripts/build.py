@@ -11,7 +11,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = json.loads((ROOT / "native/upstream.json").read_text())
 ADDONS = ("classicui", "kimpanel", "dbusfrontend")
-OVERLAYS = ("qmlpopup.cpp", "qmlpopup.h")
+OVERLAYS = ("qmlpopup.cpp", "qmlpopup.h", "overlaycursor.cpp", "overlaycursor.h")
 
 
 def run(args, **kwargs):

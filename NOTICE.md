@@ -3,10 +3,11 @@
 This reorganization preserves existing license notices; it does not relicense
 upstream code or choose a blanket license on the owner's behalf.
 
-- `native/patches/fcitx5-integration.patch` modifies fcitx5 5.1.21, revision
-  `1319952f284eae17a36cba9e800843ca61a163c1`. Upstream per-file license notices
+- `native/patches/fcitx5-integration.patch` modifies fcitx5 5.1.23, revision
+  `27cca6e0239938b2d53937061d0980c087856b22`. Upstream per-file license notices
   remain applicable (primarily LGPL-2.1-or-later; consult upstream LICENSES).
 - `native/qmlpopup.cpp` and `.h` retain their LGPL-2.1-or-later SPDX identifiers.
+- `native/overlaycursor.cpp` and `.h` use LGPL-2.1-or-later SPDX identifiers.
 - Yoga is downloaded at the locked revision and retains its upstream license.
 - Qt/PySide6, Quickshell, fcitx and distro dependencies have their own licenses.
   Their source trees/binaries/venvs are not distributed through this Git history.

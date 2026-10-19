@@ -21,7 +21,7 @@ index 808a509..614033b 100644
          waylandui.cpp waylandwindow.cpp waylandshmwindow.cpp
          waylandpointer.cpp buffer.cpp waylandinputwindow.cpp
 -        waylandcursor.cpp waylandcursortheme.cpp)
-+        waylandcursor.cpp waylandcursortheme.cpp qmlpopup.cpp)
++        waylandcursor.cpp waylandcursortheme.cpp qmlpopup.cpp overlaycursor.cpp)
      set(CLASSICUI_LIBS ${CLASSICUI_LIBS}
          Fcitx5::Module::Wayland Fcitx5::Module::WaylandIM Wayland::Client Fcitx5::Wayland::Core
          Wayland::Cursor
@@ -31,7 +31,7 @@ index 808a509..614033b 100644
      Fcitx5::Core
 +    nlohmann_json::nlohmann_json
      PkgConfig::Cairo PkgConfig::Pango
-     PkgConfig::GdkPixbuf PkgConfig::GioUnix
+     PkgConfig::GdkPixbuf PkgConfig::Rsvg PkgConfig::GioUnix
      Fcitx5::Module::NotificationItem
 diff --git a/src/ui/classic/waylandinputwindow.cpp b/src/ui/classic/waylandinputwindow.cpp
 index b0570e5..a7176a8 100644
@@ -105,7 +105,27 @@ index b0570e5..a7176a8 100644
  }
  
  void WaylandInputWindow::initPanel() {
-@@ -157,18 +176,31 @@ void WaylandInputWindow::update(fcitx::InputContext *ic) {
+@@ -146,6 +165,19 @@ void WaylandInputWindow::update(fcitx::InputContext *ic) {
+ void WaylandInputWindow::update(fcitx::InputContext *ic) {
++    if (checkBoolEnvVar("FCITX_KIMPANEL_NATIVE_OVERLAY") &&
++        parent_->instance()->currentUI() == "kimpanel") {
++        if (!overlayCursor_) overlayCursor_ = std::make_unique<OverlayCursor>(ui_);
++        if (ic && ic->frontendName() == "wayland_v2") {
++            InputWindow::update(nullptr);
++            qmlHideTimer_.reset();
++            hidePanel();
++            overlayCursor_->update(ic);
++            return;
++        }
++    }
++    if (overlayCursor_) overlayCursor_->update(nullptr);
++
+     const auto oldVisible = visible();
+     auto [width, height] = InputWindow::update(ic);
+     CLASSICUI_DEBUG() << "Wayland Input Window visible:" << visible()
+                       << " for IC program:"
+                       << (ic ? ic->program() : std::string("-")) << " frontend:"
+@@ -157,18 +189,31 @@ void WaylandInputWindow::update(fcitx::InputContext *ic) {
  
      if (!visible()) {
          CLASSICUI_DEBUG() << "Hide Wayland Input Window.";
@@ -315,11 +335,12 @@ diff --git a/src/ui/classic/waylandinputwindow.h b/src/ui/classic/waylandinputwi
 index 4a12569..46d4e40 100644
 --- a/src/ui/classic/waylandinputwindow.h
 +++ b/src/ui/classic/waylandinputwindow.h
-@@ -14,6 +14,7 @@
+@@ -14,6 +14,8 @@
  #include "ext_background_effect_manager_v1.h"
  #include "ext_background_effect_surface_v1.h"
  #include "inputwindow.h"
 +#include "qmlpopup.h"
++#include "overlaycursor.h"
  #include "zwp_input_panel_surface_v1.h"
  #include "zwp_input_popup_surface_v2.h"
  
@@ -336,7 +357,7 @@ index 4a12569..46d4e40 100644
  
      WaylandUI *ui_;
      wl_fixed_t scroll_ = 0;
-@@ -46,6 +53,14 @@ private:
+@@ -46,6 +54,15 @@ private:
      TrackableObjectReference<InputContext> repaintIC_;
      std::shared_ptr<wayland::ExtBackgroundEffectManagerV1> blurManager_;
      std::unique_ptr<wayland::ExtBackgroundEffectSurfaceV1> blur_;
@@ -348,20 +369,64 @@ index 4a12569..46d4e40 100644
 +    std::unique_ptr<EventSourceTime> qmlHideTimer_;
 +    // Last: socket callbacks must be disconnected before window destruction.
 +    std::unique_ptr<QmlPopup> qml_;
++    std::unique_ptr<OverlayCursor> overlayCursor_;
  };
  
  } // namespace fcitx::classicui
 diff --git a/src/ui/kimpanel/kimpanel.cpp b/src/ui/kimpanel/kimpanel.cpp
-index ca74dab..230b858 100644
+index cf42b07..fe3c20d 100644
 --- a/src/ui/kimpanel/kimpanel.cpp
 +++ b/src/ui/kimpanel/kimpanel.cpp
-@@ -292,9 +292,11 @@ void Kimpanel::update(UserInterfaceComponent component,
+@@ -231,6 +231,13 @@ void Kimpanel::resume() {
+         }
+         auto &icEvent = static_cast<InputContextEvent &>(event);
+         auto *inputContext = icEvent.inputContext();
++        // Native text-input and a toolkit frontend can both retain focus in
++        // different groups. Only the visible panel's owner may move its card.
++        auto *owner = lastInputContext_.get();
++        if (owner && owner != inputContext && owner->hasFocus() &&
++            !owner->inputPanel().empty()) {
++            return;
++        }
+         if (inputContext->hasFocus()) {
+             CursorRectMethod method = CursorRectMethod::SetSpotRect;
+             if (inputContext->capabilityFlags().test(
+@@ -241,6 +248,14 @@ void Kimpanel::resume() {
+                     method = CursorRectMethod::SetRelativeSpotRect;
+                 }
+             }
++            if (checkBoolEnvVar("FCITX_KIMPANEL_NATIVE_OVERLAY") &&
++                inputContext->frontendName() == "wayland_v2") {
++                method = CursorRectMethod::SetRelativeSpotRectV2;
++                if (classicui()) {
++                    static_cast<UserInterface *>(classicui())->update(
++                        UserInterfaceComponent::InputPanel, inputContext);
++                }
++            }
+             proxy_->updateCursor(inputContext, method);
+         }
+     };
+@@ -292,9 +307,25 @@ void Kimpanel::update(UserInterfaceComponent component,
          return;
      }
      if (component == UserInterfaceComponent::InputPanel) {
 -        if (classicui() && isKDE() &&
 -            (inputContext->frontendName().starts_with("wayland") ||
 -             (xcb() && inputContext->display().starts_with("x11:") &&
++        // A background context's empty refresh must not steal a live panel.
++        auto *owner = lastInputContext_.get();
++        if (owner && owner != inputContext && owner->hasFocus() &&
++            !owner->inputPanel().empty() && inputContext->inputPanel().empty()) {
++            return;
++        }
++        if (checkBoolEnvVar("FCITX_KIMPANEL_NATIVE_OVERLAY") &&
++            inputContext->frontendName() == "wayland_v2") {
++            if (classicui()) static_cast<UserInterface *>(classicui())->update(component, inputContext);
++            proxy_->updateCursor(inputContext, CursorRectMethod::SetRelativeSpotRectV2);
++            updateInputPanel(inputContext);
++            return;
++        }
++
 +        if (classicui() &&
 +            (((isKDE() || checkBoolEnvVar("FCITX_KIMPANEL_WAYLAND_POPUP")) &&
 +              inputContext->frontendName().starts_with("wayland")) ||
@@ -370,3 +435,22 @@ index ca74dab..230b858 100644
                xcb()->call<IXCBModule::isXWayland>(
                    inputContext->display().substr(4))))) {
              proxy_->showAux(false);
+@@ -304,6 +335,18 @@ void Kimpanel::update(UserInterfaceComponent component,
+                 ->update(component, inputContext);
+             lastInputContext_ = inputContext->watch();
+         } else {
++            // Restore this owner's stored caret even if its earlier cursor
++            // event was suppressed while another context owned the panel.
++            CursorRectMethod method = CursorRectMethod::SetSpotRect;
++            if (inputContext->capabilityFlags().test(
++                    CapabilityFlag::RelativeRect)) {
++                if (hasRelativeV2_) {
++                    method = CursorRectMethod::SetRelativeSpotRectV2;
++                } else if (hasRelative_) {
++                    method = CursorRectMethod::SetRelativeSpotRect;
++                }
++            }
++            proxy_->updateCursor(inputContext, method);
+             updateInputPanel(inputContext);
+         }
+     } else if (component == UserInterfaceComponent::StatusArea) {

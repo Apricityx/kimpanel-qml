@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/fcitx/fcitx5.git",
-  "version": "5.1.21",
-  "commit": "1319952f284eae17a36cba9e800843ca61a163c1",
+  "version": "5.1.23",
+  "commit": "27cca6e0239938b2d53937061d0980c087856b22",
   "yoga_commit": "042f5013152eb81c1552dec945b88f7b95ca350f"
 }
