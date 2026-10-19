@@ -5,7 +5,9 @@
 ## 独立用户级安装
 
 先构建匹配版本的 addon。安装器检查上游元数据、系统 fcitx5 版本、ELF、
-RPATH / RUNPATH 和 `ldd` 依赖。当前 5.1.21 集成不能自动部署到 5.1.23。
+RPATH / RUNPATH 和 `ldd` 依赖。当前集成对应 5.1.23；历史 5.1.21 addon 必须重建。
+安装器还会校验并复制私有 emoji 字体及其 OFL 许可；复用已有 renderer 环境时，
+请先执行 `make emoji-font`。
 
 ```sh
 python3 scripts/install.py --dry-run --prefix "$HOME/.local"
@@ -47,8 +49,12 @@ fcitx5-user-local
 kimpanel-qmlctl start
 ```
 
-fcitx 启动器以前台方式运行。原生 renderer QML 改动需明确重启 fcitx；
-`kimpanel-qmlctl restart` 只影响 bridge / overlay。
+fcitx 启动器以前台方式运行，默认原生 overlay 加透明光标定位 surface。
+明确回退时使用 `KIMPANEL_NATIVE_UI=popup fcitx5-user-local`；再设
+`FCITX_QML_POPUP=0` 可使用纯 Cairo popup。两种选择都会替换 fcitx，不要作为
+当前桌面的测试命令。原生 overlay 需要 bridge/Quickshell 运行，停止时不会
+自动回退。addon 或 popup renderer 改动需明确重启 fcitx；
+`kimpanel-qmlctl restart` 只影响 bridge/overlay。
 
 希望使用原生 Wayland 时，不要全局强制 GTK / QT 模块。
 `packaging/toolkit-app.sh /path/to/app` 提供可选的单应用 DBus 路由，例如 QQ。
@@ -60,7 +66,7 @@ fcitx 启动器以前台方式运行。原生 renderer QML 改动需明确重启
 自启动、fcitx 包装和 venv 入口路径。旧 addon、venv、本地归档被 Git 忽略。
 整理期间没有替换正在使用的 addon，也没有重启会话进程。
 
-以后独立部署前，先移植到匹配的系统 fcitx 版本，再安装到另一个 prefix 并测试。
+以后独立部署前，先构建匹配的系统 fcitx 版本，再安装到另一个 prefix 并测试。
 旧启动器和 venv 仍引用兼容链接时，不要删除它。只有明确更新会话路径后再退役
 该链接；安装器不会自动执行此操作。
 
@@ -69,7 +75,8 @@ fcitx 启动器以前台方式运行。原生 renderer QML 改动需明确重启
 1. 用原控制器停止 overlay。必要时明确切回系统 addon：
    ```sh
    env -u FCITX_ADDON_DIRS -u FCITX_QML_POPUP_RENDERER \
-       -u FCITX_KIMPANEL_WAYLAND_POPUP -u FCITX_KIMPANEL_TOOLKIT_UI \
+        -u FCITX_KIMPANEL_WAYLAND_POPUP -u FCITX_KIMPANEL_TOOLKIT_UI \
+        -u FCITX_KIMPANEL_NATIVE_OVERLAY \
        /usr/bin/fcitx5 -D --replace
    ```
 2. 将当前安装 runtime 改名保留，把安装器报告的 `.backup-*` 目录恢复到原路径；

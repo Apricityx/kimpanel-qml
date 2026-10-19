@@ -6,7 +6,9 @@
 
 Build matching addons first. The installer checks the upstream metadata,
 system fcitx5 version, ELF libraries, RPATH/RUNPATH and `ldd` dependencies.
-The current 5.1.21 integration cannot be deployed automatically on 5.1.23.
+It also verifies and copies the private emoji font and its OFL license; run
+`make emoji-font` first if reusing an existing renderer environment.
+The current integration targets 5.1.23; historical 5.1.21 addons must be rebuilt.
 
 ```sh
 python3 scripts/install.py --dry-run --prefix "$HOME/.local"
@@ -54,8 +56,13 @@ fcitx5-user-local
 kimpanel-qmlctl start
 ```
 
-The fcitx launcher stays in the foreground. QML renderer changes require an
-explicit fcitx restart; `kimpanel-qmlctl restart` affects only bridge/overlay.
+The fcitx launcher stays in the foreground. It defaults to native overlay plus
+the transparent caret locator. For explicit native popup fallback, launch with
+`KIMPANEL_NATIVE_UI=popup fcitx5-user-local`; also set `FCITX_QML_POPUP=0` for
+Cairo-only popup drawing. Either choice replaces fcitx: do not use it as a test
+on the live desktop. Native overlay needs the bridge/Quickshell running; no
+automatic fallback occurs if it is stopped. Addon or popup-renderer changes
+require an explicit fcitx restart; `kimpanel-qmlctl restart` affects bridge/overlay only.
 
 Do not globally force GTK/QT modules if native Wayland input is desired.
 `packaging/toolkit-app.sh /path/to/app` provides an optional per-application
@@ -69,7 +76,7 @@ existing niri startup, fcitx wrapper and venv entry-point paths. Legacy addons,
 venv and local archives are ignored by Git. No live addon was replaced and no
 session process was restarted during reorganization.
 
-For a future standalone deployment, first port to the matching system fcitx
+For a future standalone deployment, first build for the matching system fcitx
 version, install to a separate prefix and test. Do not remove the compatibility
 link while old launchers/venv entry points still use it. Only retire it after
 explicitly updating your own session paths; this is not done automatically.
@@ -80,7 +87,8 @@ explicitly updating your own session paths; this is not done automatically.
    system addons if needed:
    ```sh
    env -u FCITX_ADDON_DIRS -u FCITX_QML_POPUP_RENDERER \
-       -u FCITX_KIMPANEL_WAYLAND_POPUP -u FCITX_KIMPANEL_TOOLKIT_UI \
+        -u FCITX_KIMPANEL_WAYLAND_POPUP -u FCITX_KIMPANEL_TOOLKIT_UI \
+        -u FCITX_KIMPANEL_NATIVE_OVERLAY \
        /usr/bin/fcitx5 -D --replace
    ```
 2. Rename the current installed runtime aside; restore the printed runtime
