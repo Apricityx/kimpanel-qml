@@ -11,11 +11,12 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from prepare_fonts import verify as check_fonts
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = json.loads((ROOT / "native/upstream.json").read_text())
 ADDONS = ("classicui", "kimpanel", "dbusfrontend")
-RUNTIME = ("bridge.py", "kimpanel-qmlctl", "kimpanel", "shell", "popup", "requirements-renderer.txt")
+RUNTIME = ("bridge.py", "kimpanel-qmlctl", "kimpanel", "shell", "popup", "assets", "requirements-renderer.txt")
 
 
 def deployment_paths(prefix=None):
@@ -66,7 +67,7 @@ def copy_runtime(stage, addons, renderer_env):
     (stage / "kimpanel-qmlctl").chmod(0o755)
     (stage / "popup/launch").chmod(0o755)
     # Source-only offscreen checks are intentionally not deployed.
-    for name in ("check.py", "check_motion.py", "check_placement.py"):
+    for name in ("check.py", "check_motion.py", "check_placement.py", "check_emoji.py"):
         (stage / "popup" / name).unlink()
 
 
@@ -121,6 +122,7 @@ def main():
     if args.dry_run:
         return
     check_addons(addons)
+    check_fonts()
     if args.renderer_env or renderer_env.exists():
         # Reuse only verified environments, never mutate an unrelated/old venv.
         check_renderer(renderer_env)

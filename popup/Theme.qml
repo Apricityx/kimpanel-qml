@@ -12,6 +12,9 @@ QtObject {
     property color shadow: colors.shadow || "#000000"
     property real radius: Native ? Native.radius : 14
     readonly property string font: "Noto Sans CJK SC"
+    readonly property var emojiFont: FontLoader {
+        source: Qt.resolvedUrl("../assets/fonts/NotoColorEmoji.ttf")
+    }
     readonly property int textSize: 17
     readonly property int labelSize: 11
     readonly property int compSize: 14

@@ -32,6 +32,12 @@ Singleton {
 
     property real radius: 14
     readonly property string font: "Noto Sans CJK SC"
+    // Register a private CBDT/CBLC emoji font. System COLRv1 fonts can match
+    // successfully yet produce entirely blank glyphs with current Qt builds.
+    readonly property var emojiFont: FontLoader {
+        // Quickshell's QML scanner blocks relative resources outside shell/.
+        source: "file://" + Quickshell.shellDir + "/../assets/fonts/NotoColorEmoji.ttf"
+    }
     readonly property int textSize: 17
     readonly property int labelSize: 11
     readonly property int compSize: 14

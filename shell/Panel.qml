@@ -46,14 +46,19 @@ Item {
         } else {
             const sh = Math.max(spot.h, 18);
             const caretX = spot.x;
+            // Wayland relative rectangles anchor the card at the caret top.
+            // XWayland keeps its established below-caret placement unchanged.
+            const caretTop = spot.caretTop === true;
+            const anchorY = spot.y + (caretTop ? 0 : sh + caretGap);
+            const gap = caretTop ? 0 : caretGap;
             // Follow every caret update, including committed text advancing
             // the next composition. Springs keep their current velocity.
-            const below = height - (spot.y + sh) - caretGap - margin;
-            const roomAbove = spot.y - caretGap - margin;
+            const below = height - anchorY - margin;
+            const roomAbove = spot.y - gap - margin;
             if (fresh || (above ? roomAbove < h : below < h))
                 above = below < h && roomAbove > below;
             x = caretX;
-            y = above ? spot.y - caretGap - h : spot.y + sh + caretGap;
+            y = above ? spot.y - gap - h : anchorY;
         }
         x = Math.max(margin, Math.min(x, width - w - margin));
         y = Math.max(margin, Math.min(y, height - h - margin));

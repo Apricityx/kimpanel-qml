@@ -60,6 +60,22 @@ QTest.qWait(850)
 start = snapshot()
 assert start["x"] == 180 and start["y"] == 230, start
 
+# Only explicitly marked Wayland rectangles use caret-top alignment. Legacy
+# XWayland states must keep their existing 24px caret height + 6px gap.
+update(spot=dict(x=180, y=200, w=1, h=24, caretTop=True))
+continuous(start, snapshot())
+assert snapshot()["ty"] == 200, snapshot()
+QTest.qWait(850)
+assert abs(snapshot()["y"] - 200) < .1, snapshot()
+update(spot=dict(x=180, y=200, w=1, h=48, caretTop=True))
+assert snapshot()["ty"] == 200, snapshot()
+update(spot=dict(x=180, y=200, w=1, h=0, caretTop=True))
+assert snapshot()["ty"] == 200, snapshot()
+update(spot=spot(180, 200))
+assert snapshot()["ty"] == 230, snapshot()
+QTest.qWait(850)
+start = snapshot()
+
 # Small caret steps used to be ignored while inside the sticky card width.
 update(spot=spot(198, 200))
 now = snapshot()
@@ -117,6 +133,15 @@ continuous(before, snapshot())
 assert snapshot()["above"], snapshot()
 QTest.qWait(850)
 
+# Wayland edge avoidance still flips above and touches the caret's top.
+update(spot=dict(x=500, y=770, w=1, h=24, caretTop=True))
+now = snapshot()
+assert now["above"] and abs(now["ty"] + panel.property("targetH") - 770) < .1, now
+update(spot=dict(x=0, y=0, w=1, h=24, caretTop=True), session=state["session"] + 1)
+assert snapshot()["tx"] == 8 and snapshot()["ty"] == 8, snapshot()
+update(spot=spot(500, 770), session=state["session"] + 1)
+QTest.qWait(850)
+
 # Output geometry changes retarget a still-visible card rather than snapping.
 before = snapshot()
 renderer.root.setWidth(540)
@@ -136,5 +161,5 @@ assert snapshot()["x"] == 90 and snapshot()["y"] == 150, snapshot()
 panel.setProperty("compositorPopup", True)
 evaluate("place(true, true)")
 assert snapshot()["x"] == 16 and snapshot()["y"] == 16, snapshot()
-print("PASS: caret following, position/velocity continuity, early/late fade interruption, "
+print("PASS: Wayland caret-top/XWayland below-caret alignment, caret following, position/velocity continuity, early/late fade interruption, "
       "rapid commit/retype, placement flip, output resize, hidden initialization, native placement")
