@@ -13,10 +13,6 @@ Singleton {
         || ((Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/kimpanel-qml/panel.sock")
 
     readonly property bool connected: sock.connected
-    readonly property string statePath: {
-        const p = socketPath;
-        return p.endsWith(".sock") ? p.slice(0, p.length - 5) + "-state.json" : p + "-state.json";
-    }
     // `active` drives show/hide. While hidden, the fields below keep the last
     // shown content, so the panel can animate out without going blank.
     property bool active: false
@@ -36,7 +32,9 @@ Singleton {
     function select(i) { send("select " + i); }
     function prev() { if (hasPrev) send("prev"); }
     function next() { if (hasNext) send("next"); }
-    function send(cmd) { if (sock.connected) sock.write(cmd + "\n"); }
+    function send(cmd) {
+        if (sock.connected) { sock.write(cmd + "\n"); sock.flush(); }
+    }
 
     function handle(line) {
         if (!line || !line.length) return;
@@ -59,18 +57,13 @@ Singleton {
         active = true;
     }
 
-    // Proven-working read path: tail -F the atomically-replaced state file.
-    // (Quickshell Socket-as-client and FileView-in-a-singleton both missed updates.)
-    Process {
-        running: true
-        command: ["sh", "-c", "exec tail -n +1 -F " + b.statePath]
-        stdout: SplitParser { onRead: line => b.handle(line) }
-    }
-
     Socket {
         id: sock
         path: b.socketPath
         connected: true
+        // The hub replays the latest state on connect. tail -F on the diagnostic
+        // snapshot can skip entire compositions between atomic replacements.
+        parser: SplitParser { onRead: line => b.handle(line) }
         onConnectionStateChanged: {
             if (connected) {
                 retry.interval = 250;
