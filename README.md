@@ -2,75 +2,44 @@
 
 English | [简体中文](README.zh-CN.md)
 
-A QML candidate frontend for **fcitx5 on niri/Wayland**, keeping system input
-method core libraries and engines.
+A Quickshell QML candidate frontend for **fcitx5 on niri/Wayland**. It keeps the
+system input method core and engines and only replaces the UI.
 
 ## Features
 
-- Native Wayland classicui popups and GTK/Qt DBus Quickshell overlays, sharing visuals.
-- Opaque vertical candidate-text reels with rapid retargeting, highlighting,
-  pointer selection and wheel/keyboard paging.
-- No paging buttons or reserved button space in the candidate layout.
-- Spring-based overlay position, size and reveal; typing during fade-out resumes
-  from the current pose and velocity.
-- Optional DankMaterialShell colors/radius; built-in theme without DMS.
-- Separate offscreen renderer, stale-command protection and Cairo fallback on failure.
+- One stable overlay for native Wayland, toolkit DBus, XWayland and XIM candidates.
+- Invisible native caret surface; visible native popups remain an explicit
+  `KIMPANEL_NATIVE_UI=popup` fallback.
+- Caret-top alignment on Wayland, xwayland-satellite cursor translation, and
+  best-effort tiled-window origins.
+- Vertically scrolling candidate reel with spring animation, pointer, wheel and
+  keyboard paging, but no paging buttons.
+- Private pinned color emoji font; optional DankMaterialShell colors and radius.
 
-**Not implemented: arbitrary global movement animation for native popups.** The
-expanded-canvas experiment is paused and not part of the default runtime.
-Overlay geometry can be approximate for tiled windows while scrolling.
+## Build
 
-## Getting started
-
-The native addons target pinned fcitx **5.1.21**; this is not a standalone engine:
+The native addons target a pinned fcitx5 **5.1.23**; this is not a standalone engine.
 
 ```sh
-make renderer-env
-make prepare
-make build
-make test
-make test-renderer
-# Only when system fcitx5 matches the lock; no automatic activation/restart
-make install
+make emoji-font renderer-env   # PySide6 environment + pinned emoji font
+make prepare build
+make test test-renderer test-overlay
+make install                   # only if the system fcitx5 matches the lock
 ```
 
-Read the dependencies, version constraints and complete instructions first:
+Installation never activates, restarts or edits session settings. Sources,
+versions and rollback: [build](docs/build.en.md), [install](docs/install.en.md),
+[architecture](docs/architecture.en.md), [provenance](docs/third-party.md).
 
-- [Build](docs/build.en.md)
-- [Install, activate and roll back](docs/install.en.md)
-- [Architecture, layout, maintenance and limits](docs/architecture.en.md)
-- [Licensing and provenance](docs/third-party.md)
-- [Paused native canvas experiment](experiments/canvas-probe/README.md)
-
-### Local migration status
-
-Sources now live in `~/workspace/kimpanel-qml`. The former
-`~/.local/share/kimpanel-qml` is a compatibility symlink, so existing startup
-paths remain valid. `addon/`, `popup-venv/` and `local/` contain preserved local
-artifacts/archives, not Git sources. The installer refuses to overwrite a
-symlink pointing to the source checkout.
-
-At migration the host runs fcitx **5.1.23**, while the patch/old addons target
-**5.1.21**. This does not establish cross-version compatibility. Installation
-rejects mismatches; porting, rebuilding and validation are separate work.
-This reorganization does not change IM environment settings, upgrade addons or
-restart fcitx/the compositor.
-
-Migration checks: Python/packaging tests, offscreen renderer tests and repeated
-source preparation pass. A new native build on this host stops at missing
-extra-cmake-modules (ECM); it has not been compiled or deployed in this migration.
-
-## Controls
+## Control
 
 ```sh
-./kimpanel-qmlctl status
-./kimpanel-qmlctl start
-./kimpanel-qmlctl restart
-./kimpanel-qmlctl logs
-./kimpanel-qmlctl demo
+./kimpanel-qmlctl status | start | restart | logs | demo
 ```
 
-The controller manages bridge/overlay only; the native renderer belongs to
-fcitx. Demo displays an overlay; unit/offscreen tests do not operate real input.
-A blanket license for original project files is pending the owner's selection;
-a local Git repository is not itself authorization for public redistribution.
+## Limits
+
+- Arbitrary global movement animation for the native popup fallback is not
+  implemented; the canvas experiment stays paused.
+- Tiled overlay geometry is an estimate and can lag while scrolling.
+- No project-wide license has been chosen yet; see [NOTICE.md](NOTICE.md).
